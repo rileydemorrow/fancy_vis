@@ -1,0 +1,286 @@
+---
+title: "Rain Movies"
+author: "Matthew Ross"
+date: "11/7/2019"
+output: html_document
+---
+
+# Using R to make movies
+
+While most of the visualizations made in R are `static`, with a single image 
+displaying the data, one can also make videos in R. These are particularly 
+useful when data has a temporal component or a third axis for display. Here
+we will show a few ways to make videos using R and airport weather data 
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(riem) # Precipitation data
+library(animation) #movie making
+library(USAboundaries) # boundary data
+library(gganimate) #another way to make movies
+library(lubridate)
+library(ggthemes)
+library(tmap)
+library(sf)
+theme_set(theme_few()) # Set ggplot theme
+
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Data acquisition and reshaping
+
+
+## Finding our station names
+
+```{r}
+#riem_networks() # look for network names
+
+co_stations <- riem_stations(network = 'CO_ASOS')
+
+#View(co_stations)
+
+stations <- c('AFF', 'FNL')
+
+```
+
+## Download station data
+
+```{r}
+
+af_p <- riem_measures(station='AFF',date_start = '2018-10-01',
+                      date_end = '2019-09-30')
+
+
+fc <- riem_measures(station='FNL',date_start = '2018-10-01',
+                      date_end = '2019-09-30')
+
+View(fc)
+
+```
+
+
+## Convert both to daily
+
+```{r}
+
+daily_p <- fc %>% 
+  bind_rows(af_p) %>%
+  mutate(date = as.Date(valid)) %>%
+  group_by(date, station, lon, lat) %>%
+  summarize(mean_temp = mean(tmpf,na.rm=T),
+            min_temp = min(tmpf,na.rm=T),
+            max_temp = max(tmpf,na.rm=T),
+            daily_p = sum(p01i,na.rm=T)) %>%
+  as.data.frame() %>%
+  as_tibble()
+
+```
+
+
+# Making videos 
+
+## Boring first video
+
+```{r}
+
+slice_p <- daily_p %>%
+  slice(1:20)
+
+p1 <- ggplot(slice_p,aes(x=date,y=mean_temp,color=station,group=station)) + 
+  geom_point() +
+  labs(title = 'Date: {frame_time}', x='Date',y= 'Mean Temp (f)') + 
+  transition_time(date) 
+
+
+animate(p1, nframes=nrow(slice_p))
+
+
+```
+
+
+## Leaving a trace
+
+```{r}
+p2 <- ggplot(daily_p,aes(x=date,y=mean_temp,color=station,group=station)) + 
+  geom_line() + 
+  geom_point() +
+  labs(title = '100 mile temp diff', x='Date',y= 'Mean Temp (f)') + 
+  transition_reveal(date) + 
+  scale_color_few()
+
+
+animate(p2, nframes=nrow(daily_p))
+
+
+
+```
+
+
+## Static background plot
+
+
+```{r}
+usa <- us_states()
+
+co <- usa %>%
+  filter(name == 'Colorado')
+
+sf_p <- daily_p %>%
+  st_as_sf(coords=c('lon','lat'),crs=4326)
+
+
+co_elev <- elevatr::get_elev_raster(co,z=6)
+
+tm_shape(co) + 
+  tm_polygons() + 
+  tm_shape(co_elev) +
+  tm_raster(style='cont',palette = 'Greens') + 
+  tm_shape(sf_p) + 
+  tm_dots(col='station',size=3,palette=c('red','white'))
+
+```
+
+
+
+## Quick plot
+
+```{r}
+
+
+  
+basemap <- tm_shape(co) + 
+    tm_polygons() + 
+  tm_shape(co_elev) +
+    tm_raster(style='cont',
+              palette = 'Greens',
+              title='Elevation (m)') 
+```
+
+
+
+```{r,eval=F}
+ 
+full_dates <- unique(sf_p$date)
+
+sequence <- 1:length(full_dates)
+saveVideo({
+  for(i in sequence){
+  sub_sf <- sf_p %>%
+    filter(date == full_dates[i]) %>%
+    filter(daily_p > 0)
+  
+
+  if(nrow(sub_sf) > 0){
+  finalmap <- basemap + tm_shape(sub_sf) + 
+    tm_dots(col='station',
+            size=2,
+            palette = c('red','white'),
+            legend.show = F) 
+  }else{finalmap <- basemap}
+  print(finalmap + 
+          tm_layout(title=full_dates[i]) + 
+          tm_add_legend(type='symbol',
+                        labels=c('Air Force',
+                                 'Fort Collins'),
+                        col=c('red','white'),
+                        title='Station'))
+  }
+},movie.name = 'precip_flash.mp4',
+  interval=0.05,
+  ani.width=1000,
+  ani.height=800)
+
+
+```
+
+# A cooler video
+
+## Let's see if we can see weather fronts by downloading all Colorado data and
+trying to get those to flash
+
+
+```{r,eval=F}
+
+all_co <- map(co_stations$id,~riem_measures(.x,date_start='2018-10-01',
+                                         date_end = '2019-09-30'))
+stack_co <- do.call('rbind',all_co)
+
+daily_p <- stack_co %>% 
+  mutate(date = as.Date(valid)) %>%
+  group_by(date, station, lon, lat) %>%
+  summarize(mean_temp = mean(tmpf,na.rm=T),
+            min_temp = min(tmpf,na.rm=T),
+            max_temp = max(tmpf,na.rm=T),
+            daily_p = sum(p01i,na.rm=T)) %>%
+  as.data.frame() %>%
+  as_tibble()
+
+save(daily_p,file='DailyP.RData')
+```
+
+## Full state video
+
+This code is almost identical to the above, but it uses all ASOS/AWOS precip
+stations
+
+
+```{r, eval=F}
+load('DailyP.RData')
+
+daily_sf <- daily_p %>%
+  st_as_sf(.,coords=c('lon','lat'),crs=4326,remove=F)
+
+
+
+
+full_dates <- unique(daily_sf$date)
+
+sequence <- 1:length(full_dates)
+saveVideo({
+  for(i in sequence){
+  sub_sf <- daily_sf %>%
+    filter(date == full_dates[i]) %>%
+    filter(daily_p > 0)
+  
+
+  if(nrow(sub_sf) > 0){
+  finalmap <- basemap + tm_shape(sub_sf) + 
+    tm_dots(title.size='Daily Precip (in)',
+            col='lon',
+            size='daily_p',
+            style='cont',
+            palette='Oranges',
+            legend.show = F,
+            size.max=19,
+            scale=3.5,
+            sizes.legend=c(0,1,5,10,20))
+  }else{finalmap <- basemap}
+  print(finalmap + 
+          tm_layout(title=full_dates[i],
+        legend.position=c(0.7,0.2)))
+  }
+},movie.name = 'precip_flash_all.mp4',
+  interval=0.12,
+  ani.width=1000,
+  ani.height=800)
+
+
+
+```
+
+
+
+# In Class work.
+
+## Make a video of mean temperature differences for the full Colorado dataset
+(you need to download this [here](https://www.dropbox.com/s/s7zt18elgoh8q2b/DailyP.RData?dl=0)) first.
+
+The video should look similar to the one above, but I want you to choose your own 
+style (change the background, add other layers (like counties or cities)), etc...
+
+```{r}
+load('DailyP.RData')
+```
+
