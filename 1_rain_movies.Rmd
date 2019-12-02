@@ -3,6 +3,8 @@ title: "Rain Movies"
 author: "Matthew Ross"
 date: "11/7/2019"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Using R to make movies
@@ -22,6 +24,9 @@ library(lubridate)
 library(ggthemes)
 library(tmap)
 library(sf)
+library(gifski)
+library(tigris)
+library(elevatr)
 theme_set(theme_few()) # Set ggplot theme
 
 
@@ -51,7 +56,6 @@ stations <- c('AFF', 'FNL')
 
 af_p <- riem_measures(station='AFF',date_start = '2018-10-01',
                       date_end = '2019-09-30')
-
 
 fc <- riem_measures(station='FNL',date_start = '2018-10-01',
                       date_end = '2019-09-30')
@@ -147,8 +151,6 @@ tm_shape(co) +
 ## Quick plot
 
 ```{r}
-
-
   
 basemap <- tm_shape(co) + 
     tm_polygons() + 
@@ -165,7 +167,7 @@ basemap <- tm_shape(co) +
 full_dates <- unique(sf_p$date)
 
 sequence <- 1:length(full_dates)
-saveVideo({
+saveGIF({
   for(i in sequence){
   sub_sf <- sf_p %>%
     filter(date == full_dates[i]) %>%
@@ -187,7 +189,7 @@ saveVideo({
                         col=c('red','white'),
                         title='Station'))
   }
-},movie.name = 'precip_flash.mp4',
+},movie.name = 'precip_flash.gif',
   interval=0.05,
   ani.width=1000,
   ani.height=800)
@@ -238,7 +240,7 @@ daily_sf <- daily_p %>%
 full_dates <- unique(daily_sf$date)
 
 sequence <- 1:length(full_dates)
-saveVideo({
+saveGIF({
   for(i in sequence){
   sub_sf <- daily_sf %>%
     filter(date == full_dates[i]) %>%
@@ -261,7 +263,7 @@ saveVideo({
           tm_layout(title=full_dates[i],
         legend.position=c(0.7,0.2)))
   }
-},movie.name = 'precip_flash_all.mp4',
+},movie.name = 'precip_flash_all.gif',
   interval=0.12,
   ani.width=1000,
   ani.height=800)
@@ -274,13 +276,97 @@ saveVideo({
 
 # In Class work.
 
-## Make a video of mean temperature differences for the full Colorado dataset
+## GGanimate
+
+Make a video showing the correlation between Air Force Academy and Fort Collins
+between the min, mean, and max temps. The movie should cover the full year. 
+
+```{r}
+filtered_data <- daily_p %>%
+  filter(station %in% c("AFF", "FNL"))
+
+plot1 <- ggplot(filtered_data) +
+  geom_point(aes(x=date,y=min_temp,color=station, group = seq_along(min_temp), shape = 0)) + 
+  geom_point(aes(x = date, y = max_temp, color = station, group = seq_along(max_temp), shape = 3)) +
+  geom_point(aes(x = date, y = mean_temp, color = station, group = seq_along(mean_temp))) +
+  labs(x='Date',y= 'Temp (f)')+
+  transition_reveal(date)
+ 
+
+animate(plot1, nframes=nrow(filtered_data))
+
+change legend, size or shape of min, mean, and max temps to show difference
+
+```
+
+#spread by station
+
+## (Animation package)
+
+Make a video of mean temperature differences for the full Colorado dataset
 (you need to download this [here](https://www.dropbox.com/s/s7zt18elgoh8q2b/DailyP.RData?dl=0)) first.
 
 The video should look similar to the one above, but I want you to choose your own 
 style (change the background, add other layers (like counties or cities)), etc...
 
+Creating a basemap for the final product
 ```{r}
-load('DailyP.RData')
+us <- us_states()
+
+co <- us %>%
+  filter(name == 'Colorado')
+
+elevation <- elevatr::get_elev_raster(co, z=6)
+
+counties_co <- counties(state = "Colorado", cb = TRUE)
+
+elev_co_crop <- crop(elevation, counties_co)
+
+reproj_co <- spTransform(counties_co, crs(elevation))
+
+base <- tm_shape(elev_co_crop)+
+  tm_raster(style= 'cont',
+            palette = 'Pinks',
+            title = "elevation (m)")+
+  tm_borders("black")
+  tm_shape(reproj_co)
 ```
+
+
+```{r}
+mean_temp <- daily_p %>%
+  dplyr::select(1:5)
+
+slice_mean <- mean_temp %>%
+  slice(1:100)
+
+slice_sf <- slice_mean %>%
+  st_as_sf(., coords = c('lon', 'lat'), crs = 4326, remove = F)
+
+all_dates_slice <- unique(slice_sf$date)
+
+sequence <- 1:length(all_dates_slice)
+saveGIF({
+  for(i in sequence){
+    small_sf <- slice_sf %>%
+      filter(data == all_dates_slice[i])
+    
+    my_map <- base + tm_shape(subset_sf)+
+      tm_sots(title.size = 'Mean Temperature (ºC)',
+              col = 'mean_temp',
+              size = 'mean_temp',
+              scale = 1.5,
+              style = 'cont',
+              pallate = 'Blues')
+    print(my_map +
+            tm_layout(title=all_dates_slice[i],
+                 legend.position = c(0.8, 0.3)))
+    
+  }
+}, movie.name = 'mean_temp_flashes.gif',
+  interval = 0.12,
+  ani.width = 1000,
+  ani.height = 800)
+```
+
 
